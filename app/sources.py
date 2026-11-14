@@ -63,6 +63,83 @@ class OpenSkySource:
 
 
 # ---------------------------------------------------------------------------
+# adsb.lol: free, keyless, community ADS-B network (data under ODbL). It has no
+# "everything" endpoint, but /v2/type/{icao_type} is global, so the union over the
+# common airliner types gives a worldwide picture of commercial traffic. Point
+# queries (<=250 nm) return *all* aircraft near a spot and are used for small areas.
+AIRLINER_TYPES = [
+    "A20N", "A21N", "A319", "A320", "A321", "A332", "A333", "A339", "A359", "A35K", "A388", "A220",
+    "BCS1", "BCS3", "B737", "B738", "B739", "B38M", "B39M", "B3XM", "B744", "B748", "B752", "B753", "B763",
+    "B764", "B772", "B77L", "B77W", "B788", "B789", "B78X", "E170", "E175", "E75L", "E75S", "E190", "E195",
+    "E290", "E295", "CRJ2", "CRJ7", "CRJ9", "CRJX", "AT72", "AT75", "AT76", "DH8D", "MD11", "A306", "C919",
+]
+KT_TO_MS = 0.514444
+FT_TO_M = 0.3048
+
+
+def _norm_readsb(a: dict) -> dict | None:
+    if a.get("lat") is None or a.get("lon") is None:
+        return None
+    alt = a.get("alt_baro")
+    on_ground = alt == "ground"
+    alt_m = 0 if on_ground else (alt * FT_TO_M if isinstance(alt, (int, float)) else
+                                 (a["alt_geom"] * FT_TO_M if isinstance(a.get("alt_geom"), (int, float)) else None))
+    rate = a.get("baro_rate", a.get("geom_rate"))
+    desc = " · ".join(x for x in (a.get("t"), a.get("r")) if x)
+    return {"icao24": a.get("hex", "").lstrip("~"), "callsign": (a.get("flight") or "").strip(),
+            "origin_country": None, "desc": desc or None, "lat": a["lat"], "lon": a["lon"],
+            "alt_m": round(alt_m) if alt_m is not None else None, "on_ground": on_ground,
+            "velocity": a["gs"] * KT_TO_MS if a.get("gs") is not None else None, "heading": a.get("track"),
+            "vertical_rate": rate * FT_TO_M / 60 if isinstance(rate, (int, float)) else None,
+            "squawk": a.get("squawk"), "last_contact": None}
+
+
+class AdsbLolSource:
+    name = "adsb.lol"
+    base = "https://api.adsb.lol/v2"
+
+    def __init__(self):
+        self.http = httpx.Client(timeout=15, headers={"User-Agent": config.USER_AGENT})
+
+    def _get(self, path: str) -> list[dict]:
+        r = self.http.get(f"{self.base}{path}")
+        r.raise_for_status()
+        return r.json().get("ac") or []
+
+    def fetch(self, bbox=None) -> tuple[int, list[dict]]:
+        from concurrent.futures import ThreadPoolExecutor
+
+        seen: dict[str, dict] = {}
+        errors = []
+
+        def one(t):
+            try:
+                return self._get(f"/type/{t}")
+            except Exception as exc:
+                errors.append(f"{t}: {exc}")
+                return []
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for batch in pool.map(one, AIRLINER_TYPES):
+                for raw in batch:
+                    a = _norm_readsb(raw)
+                    if a and a["icao24"]:
+                        seen[a["icao24"]] = a
+        if not seen and errors:
+            raise RuntimeError(f"adsb.lol unavailable ({len(errors)} errors, e.g. {errors[0]})")
+        states = list(seen.values())
+        if bbox:
+            s, w, n, e = bbox
+            states = [a for a in states if s <= a["lat"] <= n and w <= a["lon"] <= e]
+        return int(time.time()), states
+
+    def point(self, lat: float, lon: float, radius_nm: float) -> list[dict]:
+        """All aircraft (incl. GA/helicopters) within radius_nm (max 250) of a point."""
+        raw = self._get(f"/point/{lat:.4f}/{lon:.4f}/{min(int(math.ceil(radius_nm)), 250)}")
+        return [a for x in raw if (a := _norm_readsb(x))]
+
+
+# ---------------------------------------------------------------------------
 # Demo source: deterministic synthetic traffic between real airports, so the
 # whole stack (map, queries, spike detection) can be exercised offline.
 AIRPORTS = {
@@ -162,4 +239,8 @@ class DemoSource:
 
 
 def make_source():
-    return DemoSource() if config.SOURCE == "demo" else OpenSkySource()
+    if config.SOURCE == "demo":
+        return DemoSource()
+    if config.SOURCE == "opensky":
+        return OpenSkySource()
+    return AdsbLolSource()

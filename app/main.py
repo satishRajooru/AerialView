@@ -99,7 +99,7 @@ def states(s: float = -90, w: float = -180, n: float = 90, e: float = 180, limit
     for a in monitor.states:
         if s <= a["lat"] <= n and (w <= a["lon"] <= e if w <= e else (a["lon"] >= w or a["lon"] <= e)):
             out.append([a["icao24"], a["callsign"], round(a["lat"], 4), round(a["lon"], 4), a.get("alt_m"),
-                        a.get("heading"), a.get("velocity"), a["on_ground"], a.get("origin_country")])
+                        a.get("heading"), a.get("velocity"), a["on_ground"], a.get("origin_country") or a.get("desc")])
             if len(out) >= limit:
                 break
     return {"ts": monitor.snapshot_ts, "total": len(monitor.states), "aircraft": out}
@@ -116,7 +116,7 @@ async def query(body: Ask):
     await run_in_threadpool(ready)
     res = await run_in_threadpool(engine.ask, body.q)
     res["aircraft"] = [[a["icao24"], a["callsign"], a["lat"], a["lon"], a.get("alt_m"), a.get("heading"),
-                        a.get("velocity"), a["on_ground"], a.get("origin_country")] for a in res["aircraft"]]
+                        a.get("velocity"), a["on_ground"], a.get("origin_country") or a.get("desc")] for a in res["aircraft"]]
     return res
 
 
@@ -153,35 +153,3 @@ def collect(authorization: str | None = Header(default=None)):
     return {"snapshot_ts": monitor.snapshot_ts, "aircraft": len(monitor.states), "regions": len(monitor.regions),
             "fallback_demo": monitor.using_fallback, "last_error": monitor.last_error}
 
-
-@app.get("/api/probe")
-def probe():
-    """Diagnostics: which flight-data APIs this host can reach (status + latency)."""
-    import time as _t
-
-    import httpx
-
-    targets = {
-        "opensky": f"{config.OPENSKY_URL}/states/all?lamin=-47&lomin=166&lamax=-34&lomax=179",
-        "adsb.lol": "https://api.adsb.lol/v2/point/51.47/-0.45/100",
-        "airplanes.live": "https://api.airplanes.live/v2/point/51.47/-0.45/100",
-        "adsb.fi": "https://opendata.adsb.fi/api/v2/lat/51.47/lon/-0.45/dist/100",
-        "nominatim": f"{config.NOMINATIM_URL}/search?q=Auckland&format=jsonv2&limit=1",
-        "adsb.lol type B738": "https://api.adsb.lol/v2/type/B738",
-        "adsb.lol 250nm": "https://api.adsb.lol/v2/point/40.6/-73.8/250",
-        "adsb.fi all": "https://opendata.adsb.fi/api/v2/all",
-        "adsb.lol re-api all": "https://re-api.adsb.lol/?all_with_pos",
-        "adsb.lol globe": "https://globe.adsb.lol/data/aircraft.json",
-    }
-    out = {}
-    for name, url in targets.items():
-        t0 = _t.time()
-        try:
-            r = httpx.get(url, timeout=8, headers={"User-Agent": config.USER_AGENT})
-            out[name] = {"status": r.status_code, "ms": int((_t.time() - t0) * 1000), "bytes": len(r.content),
-                         "sample": r.text[:160],
-                         "count": (lambda j: len(j.get("ac") or j.get("aircraft") or []) if isinstance(j, dict) else None)(
-                             r.json() if "json" in r.headers.get("content-type", "") else None)}
-        except Exception as exc:
-            out[name] = {"error": f"{type(exc).__name__}: {exc}", "ms": int((_t.time() - t0) * 1000)}
-    return out

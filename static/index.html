@@ -71,7 +71,7 @@ const EXAMPLES = [
 ];
 const map = L.map('map', { preferCanvas: true, worldCopyJump: true, zoomControl: true }).setView([25, 20], 2);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; OpenStreetMap &copy; CARTO | flights: OpenSky Network', subdomains: 'abcd', maxZoom: 12 }).addTo(map);
+  attribution: '&copy; OpenStreetMap &copy; CARTO | flights: adsb.lol (ODbL) / OpenSky', subdomains: 'abcd', maxZoom: 12 }).addTo(map);
 const renderer = L.canvas({ padding: 0.3 });
 const planes = L.layerGroup().addTo(map);
 const highlight = L.layerGroup().addTo(map);

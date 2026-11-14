@@ -1,8 +1,11 @@
 """Settings, all overridable with environment variables."""
 import os
 
-# Data source: "opensky" (live, global), or "demo" (synthetic flights, works offline).
-SOURCE = os.getenv("AM_SOURCE", "opensky")
+# Data source:
+#   "adsblol" (default): adsb.lol, free and keyless; worldwide airliners + all aircraft for small areas.
+#   "opensky": OpenSky Network, all transponder traffic, but rate limited and blocked from many cloud hosts.
+#   "demo": synthetic flights, works offline.
+SOURCE = os.getenv("AM_SOURCE", "adsblol")
 
 # OpenSky Network. Anonymous access works but is heavily rate limited
 # (~400 credits/day; a global /states/all call costs 4). Create a free account and an
@@ -17,7 +20,7 @@ OPENSKY_CLIENT_SECRET = os.getenv("OPENSKY_CLIENT_SECRET")
 
 # Seconds between global snapshots. Default respects anonymous OpenSky limits;
 # drop to 60-120 with an authenticated client.
-POLL_SECONDS = int(os.getenv("AM_POLL_SECONDS", "900" if not OPENSKY_CLIENT_ID else "120"))
+POLL_SECONDS = int(os.getenv("AM_POLL_SECONDS", "900" if SOURCE == "opensky" and not OPENSKY_CLIENT_ID else "120"))
 
 NOMINATIM_URL = os.getenv("AM_NOMINATIM_URL", "https://nominatim.openstreetmap.org")
 USER_AGENT = os.getenv("AM_USER_AGENT", "aerial-monitor/0.1 (self-hosted)")
@@ -57,7 +60,7 @@ DEMO_BACKFILL_DAYS = int(os.getenv("AM_DEMO_BACKFILL_DAYS", "7"))
 # recorded at most every RECORD_INTERVAL seconds, triggered by traffic or by the
 # scheduled GitHub Action hitting /api/collect.
 SERVERLESS = os.getenv("AM_SERVERLESS", "1" if os.getenv("VERCEL") else "0") == "1"
-SNAPSHOT_TTL = int(os.getenv("AM_SNAPSHOT_TTL", "60" if OPENSKY_CLIENT_ID else "300"))
+SNAPSHOT_TTL = int(os.getenv("AM_SNAPSHOT_TTL", "300" if SOURCE == "opensky" and not OPENSKY_CLIENT_ID else "90"))
 RECORD_INTERVAL = int(os.getenv("AM_RECORD_INTERVAL", "600"))
 COLLECT_TOKEN = os.getenv("AM_COLLECT_TOKEN")  # optional shared secret for /api/collect
 # If the live source fails and we have nothing to show, serve demo data (flagged in the UI).

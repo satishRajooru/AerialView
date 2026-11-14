@@ -173,6 +173,24 @@ class QueryEngine:
     def __init__(self, monitor: Monitor):
         self.m = monitor
 
+    def _local_detail(self, r: Region, qi: QueryIntent) -> list[dict]:
+        """For small areas, ask the source for *every* aircraft nearby (not just airliners)."""
+        point = getattr(self.m.source, "point", None)
+        if not point:
+            return []
+        from .geo import haversine_km
+
+        clat, clon = r.centroid()
+        s, w, n, e = r.bbox
+        reach_km = r.radius_km or max(haversine_km(clat, clon, la, lo) for la in (s, n) for lo in (w, e))
+        if reach_km > 460:  # API max is 250 nm
+            return []
+        try:
+            return _apply_filters(point(clat, clon, reach_km / 1.852 + 1), qi)
+        except Exception as exc:
+            print(f"[query] point lookup failed: {exc}")
+            return []
+
     def parse(self, q: str) -> tuple[QueryIntent, str]:
         qi = llm_parse(q)
         return (qi, "claude") if qi else (rule_parse(q), "rules")
@@ -199,6 +217,10 @@ class QueryEngine:
         if qi.intent in ("count", "list"):
             for r in regions:
                 inside = [a for a in states if r.contains(a["lat"], a["lon"])]
+                extra = self._local_detail(r, qi)
+                if extra:
+                    known = {a["icao24"] for a in inside}
+                    inside += [a for a in extra if a["icao24"] not in known and r.contains(a["lat"], a["lon"])]
                 self.m.watch(r)
                 desc = f"within {r.radius_km:g} km of {r.name}" if r.radius_km else f"over {r.name}"
                 lines.append(f"{len(inside):,} aircraft{_filters_text(qi)} {'is' if len(inside) == 1 else 'are'} {desc} right now.")

@@ -117,3 +117,24 @@ def test_vercel_rewrite_fix_restores_path():
     assert seen["path"] == "/"
     asyncio.run(mw({"type": "http", "path": "/api/status", "query_string": b""}, None, None))
     assert seen["path"] == "/api/status"
+
+
+def test_adsblol_source_merges_types(monkeypatch):
+    calls = []
+
+    def fake_get(self, path):
+        calls.append(path)
+        if path == "/type/B738":
+            return [{"hex": "abc", "flight": "ASA1 ", "t": "B738", "r": "N1", "lat": 40, "lon": -74,
+                     "alt_baro": 36000, "gs": 450, "track": 90, "baro_rate": -600}]
+        if path == "/type/A320":
+            return [{"hex": "def", "lat": 51, "lon": 0, "alt_baro": "ground", "gs": 5},
+                    {"hex": "nopos"}]
+        return []
+
+    monkeypatch.setattr(sources.AdsbLolSource, "_get", fake_get)
+    _, st = sources.AdsbLolSource().fetch()
+    by = {a["icao24"]: a for a in st}
+    assert set(by) == {"abc", "def"} and len(calls) == len(sources.AIRLINER_TYPES)
+    assert by["abc"]["callsign"] == "ASA1" and round(by["abc"]["alt_m"]) == 10973 and by["abc"]["desc"] == "B738 · N1"
+    assert by["def"]["on_ground"] and by["def"]["alt_m"] == 0
