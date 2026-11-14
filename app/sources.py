@@ -67,11 +67,13 @@ class OpenSkySource:
 # "everything" endpoint, but /v2/type/{icao_type} is global, so the union over the
 # common airliner types gives a worldwide picture of commercial traffic. Point
 # queries (<=250 nm) return *all* aircraft near a spot and are used for small areas.
+# Most common first: if the feed throttles us partway through, we've already got the bulk.
 AIRLINER_TYPES = [
-    "A20N", "A21N", "A319", "A320", "A321", "A332", "A333", "A339", "A359", "A35K", "A388", "A220",
-    "BCS1", "BCS3", "B737", "B738", "B739", "B38M", "B39M", "B3XM", "B744", "B748", "B752", "B753", "B763",
-    "B764", "B772", "B77L", "B77W", "B788", "B789", "B78X", "E170", "E175", "E75L", "E75S", "E190", "E195",
-    "E290", "E295", "CRJ2", "CRJ7", "CRJ9", "CRJX", "AT72", "AT75", "AT76", "DH8D", "MD11", "A306", "C919",
+    "B738", "A320", "A20N", "A321", "A21N", "B38M", "A319", "B77W", "B789", "A333", "E75L", "B737",
+    "B739", "B788", "A359", "CRJ9", "AT76", "B772", "DH8D", "E190", "A332", "BCS3", "E195", "B763",
+    "CRJ7", "A388", "B78X", "B744", "B748", "B752", "B77L", "A339", "A35K", "BCS1", "B39M", "B3XM",
+    "E170", "E175", "E75S", "E290", "E295", "CRJ2", "CRJX", "AT72", "AT75", "B753", "B764", "MD11",
+    "A306", "A220", "C919",
 ]
 KT_TO_MS = 0.514444
 FT_TO_M = 0.3048
@@ -143,8 +145,11 @@ class AdsbLolSource:
                 errors.append(f"{t}: {type(exc).__name__}")
             return t, None
 
+        # Never-fetched types first (in popularity order), then the stalest: after a
+        # throttled round, the next round picks up exactly where this one stopped.
+        order = sorted(AIRLINER_TYPES, key=lambda t: (t in self.type_cache, self.type_cache.get(t, (0,))[0]))
         with ThreadPoolExecutor(max_workers=config.ADSBLOL_CONCURRENCY) as pool:
-            results = list(pool.map(one, AIRLINER_TYPES))
+            results = list(pool.map(one, order))
 
         seen: dict[str, dict] = {}
         cov = {"fresh": 0, "cached": 0, "missing": 0}
