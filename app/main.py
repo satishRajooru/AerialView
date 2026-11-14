@@ -167,6 +167,11 @@ def probe():
         "airplanes.live": "https://api.airplanes.live/v2/point/51.47/-0.45/100",
         "adsb.fi": "https://opendata.adsb.fi/api/v2/lat/51.47/lon/-0.45/dist/100",
         "nominatim": f"{config.NOMINATIM_URL}/search?q=Auckland&format=jsonv2&limit=1",
+        "adsb.lol type B738": "https://api.adsb.lol/v2/type/B738",
+        "adsb.lol 250nm": "https://api.adsb.lol/v2/point/40.6/-73.8/250",
+        "adsb.fi all": "https://opendata.adsb.fi/api/v2/all",
+        "adsb.lol re-api all": "https://re-api.adsb.lol/?all_with_pos",
+        "adsb.lol globe": "https://globe.adsb.lol/data/aircraft.json",
     }
     out = {}
     for name, url in targets.items():
@@ -174,7 +179,9 @@ def probe():
         try:
             r = httpx.get(url, timeout=8, headers={"User-Agent": config.USER_AGENT})
             out[name] = {"status": r.status_code, "ms": int((_t.time() - t0) * 1000), "bytes": len(r.content),
-                         "sample": r.text[:160]}
+                         "sample": r.text[:160],
+                         "count": (lambda j: len(j.get("ac") or j.get("aircraft") or []) if isinstance(j, dict) else None)(
+                             r.json() if "json" in r.headers.get("content-type", "") else None)}
         except Exception as exc:
             out[name] = {"error": f"{type(exc).__name__}: {exc}", "ms": int((_t.time() - t0) * 1000)}
     return out
