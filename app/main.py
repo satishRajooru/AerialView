@@ -152,3 +152,29 @@ def collect(authorization: str | None = Header(default=None)):
         monitor.poll_once()
     return {"snapshot_ts": monitor.snapshot_ts, "aircraft": len(monitor.states), "regions": len(monitor.regions),
             "fallback_demo": monitor.using_fallback, "last_error": monitor.last_error}
+
+
+@app.get("/api/probe")
+def probe():
+    """Diagnostics: which flight-data APIs this host can reach (status + latency)."""
+    import time as _t
+
+    import httpx
+
+    targets = {
+        "opensky": f"{config.OPENSKY_URL}/states/all?lamin=-47&lomin=166&lamax=-34&lomax=179",
+        "adsb.lol": "https://api.adsb.lol/v2/point/51.47/-0.45/100",
+        "airplanes.live": "https://api.airplanes.live/v2/point/51.47/-0.45/100",
+        "adsb.fi": "https://opendata.adsb.fi/api/v2/lat/51.47/lon/-0.45/dist/100",
+        "nominatim": f"{config.NOMINATIM_URL}/search?q=Auckland&format=jsonv2&limit=1",
+    }
+    out = {}
+    for name, url in targets.items():
+        t0 = _t.time()
+        try:
+            r = httpx.get(url, timeout=8, headers={"User-Agent": config.USER_AGENT})
+            out[name] = {"status": r.status_code, "ms": int((_t.time() - t0) * 1000), "bytes": len(r.content),
+                         "sample": r.text[:160]}
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}", "ms": int((_t.time() - t0) * 1000)}
+    return out
