@@ -35,6 +35,7 @@
   .tag.spike { background:var(--warn); color:#000; } .tag.normal { background:#23302a; color:var(--ok); }
   .tag.dip { background:#1f2a3a; color:var(--accent); } .tag.insufficient_history { background:#2a2a2a; color:var(--muted); }
   .legend { background:rgba(22,27,34,.9); color:var(--text); padding:6px 8px; border-radius:6px; font-size:11px; line-height:1.6; }
+  .world-btn { display:block; background:#fff; color:#111 !important; font:600 12px system-ui; padding:5px 8px; text-decoration:none; }
   .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
   @media (max-width: 800px) { #app { grid-template-columns:1fr; grid-template-rows: 55vh 45vh; } aside { border-left:0; border-top:1px solid var(--line); } }
 </style>
@@ -89,6 +90,20 @@ legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend');
   d.innerHTML = '<i style="background:#58a6ff"></i>cruise &gt;8 km<br><i style="background:#d2a8ff"></i>3–8 km<br><i style="background:#f0883e"></i>&lt;3 km<br><i style="background:#6e7681"></i>on ground<br><i style="background:#ffd33d"></i>query match'; return d; };
 legend.addTo(map);
 
+// "World" button: clear any query highlight and zoom back out to the whole globe.
+const worldBtn = L.control({ position: 'topleft' });
+worldBtn.onAdd = () => {
+  const b = L.DomUtil.create('a', 'leaflet-bar world-btn');
+  b.href = '#'; b.title = 'Show the whole world'; b.textContent = 'World';
+  L.DomEvent.on(b, 'click', e => { L.DomEvent.preventDefault(e); showWorld(); });
+  return b;
+};
+worldBtn.addTo(map);
+function showWorld() {
+  regions.clearLayers(); highlight.clearLayers();
+  map.setView([25, 20], 2);
+}
+
 function popup(a) {
   const [icao, cs, lat, lon, alt, hdg, vel, gnd, origin] = a;
   return `<b>${cs || icao}</b><br>ICAO24 ${icao}<br>${origin || ''}<br>` +
@@ -98,7 +113,7 @@ function popup(a) {
 function drawPlanes(list, layer, color, r) {
   layer.clearLayers();
   for (const a of list) {
-    L.circleMarker([a[2], a[3]], { renderer, radius: r, stroke: false, fillOpacity: .85,
+    L.circleMarker([a[2], a[3]], { renderer, radius: r, stroke: false, fillOpacity: .9,
       fillColor: color || altColor(a[4], a[7]) }).bindPopup(() => popup(a)).addTo(layer);
   }
 }
@@ -106,7 +121,7 @@ function drawPlanes(list, layer, color, r) {
 async function refresh() {
   try {
     const [st, s] = await Promise.all([fetch('/api/status').then(r => r.json()), fetch('/api/states').then(r => r.json())]);
-    drawPlanes(s.aircraft, planes, null, 2);
+    drawPlanes(s.aircraft, planes, null, 2.5);
     const when = st.snapshot_ts ? new Date(st.snapshot_ts * 1000).toLocaleTimeString() : '—';
     document.getElementById('status').innerHTML =
       `<b>${st.aircraft.toLocaleString()}</b> aircraft · <b>${st.airborne.toLocaleString()}</b> airborne · source <b>${st.fallback_demo ? 'DEMO (live feed unavailable)' : st.source}</b> · snapshot ${when}` +
@@ -136,7 +151,7 @@ function renderResult(res) {
   regions.clearLayers();
   if (res.regions.length) {
     const g = L.geoJSON(res.regions, { style: { color: '#ffd33d', weight: 1.5, fillOpacity: 0.06 } }).addTo(regions);
-    map.fitBounds(g.getBounds(), { maxZoom: 9, padding: [20, 20] });
+    map.fitBounds(g.getBounds(), { maxZoom: res.regions.length > 1 ? 3 : 9, padding: [20, 20] });
   }
   drawPlanes(res.aircraft, highlight, '#ffd33d', 3.5);
 }

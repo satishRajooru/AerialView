@@ -88,7 +88,7 @@ def status():
             "persistent_history": getattr(store, "persistent", True), "source": monitor.source.name, "snapshot_ts": monitor.snapshot_ts, "aircraft": len(monitor.states),
             "airborne": sum(1 for a in monitor.states if not a["on_ground"]), "last_error": monitor.last_error,
             "watching": [r.name for r in monitor.regions.values()], "poll_seconds": config.POLL_SECONDS,
-            "llm": config.USE_LLM}
+            "llm": config.USE_LLM, "source_errors": getattr(monitor.source, "last_errors", [])[:10]}
 
 
 @app.get("/api/states")

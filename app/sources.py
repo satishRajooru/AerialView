@@ -100,11 +100,17 @@ class AdsbLolSource:
 
     def __init__(self):
         self.http = httpx.Client(timeout=15, headers={"User-Agent": config.USER_AGENT})
+        self.last_errors: list[str] = []
 
     def _get(self, path: str) -> list[dict]:
-        r = self.http.get(f"{self.base}{path}")
-        r.raise_for_status()
-        return r.json().get("ac") or []
+        for attempt in range(3):
+            r = self.http.get(f"{self.base}{path}")
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(float(r.headers.get("retry-after", 0) or 0) or 0.5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            return r.json().get("ac") or []
+        return []
 
     def fetch(self, bbox=None) -> tuple[int, list[dict]]:
         from concurrent.futures import ThreadPoolExecutor
@@ -119,12 +125,13 @@ class AdsbLolSource:
                 errors.append(f"{t}: {exc}")
                 return []
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             for batch in pool.map(one, AIRLINER_TYPES):
                 for raw in batch:
                     a = _norm_readsb(raw)
                     if a and a["icao24"]:
                         seen[a["icao24"]] = a
+        self.last_errors = errors
         if not seen and errors:
             raise RuntimeError(f"adsb.lol unavailable ({len(errors)} errors, e.g. {errors[0]})")
         states = list(seen.values())
