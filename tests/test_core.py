@@ -100,23 +100,20 @@ def test_serverless_fallback_to_demo(monkeypatch, tmp_path):
     assert store.meta("last_record") is None  # synthetic data never enters real history
 
 
-def test_vercel_entrypoint_restores_path():
+def test_vercel_rewrite_fix_restores_path():
     import asyncio
-    import importlib.util
-    from pathlib import Path
 
-    spec = importlib.util.spec_from_file_location("vercel_entry", Path(__file__).parent.parent / "api" / "index.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    from app.main import VercelRewriteFix
+
     seen = {}
 
     async def fake(scope, receive, send):
         seen.update(path=scope["path"], qs=scope["query_string"])
 
-    mod.fastapi_app = fake
-    asyncio.run(mod.app({"type": "http", "path": "/api/index", "query_string": b"s=1&__path=/api/states&w=2"}, None, None))
+    mw = VercelRewriteFix(fake)
+    asyncio.run(mw({"type": "http", "path": "/api/index", "query_string": b"s=1&__path=%2Fapi%2Fstates&w=2"}, None, None))
     assert seen == {"path": "/api/states", "qs": b"s=1&w=2"}
-    asyncio.run(mod.app({"type": "http", "path": "/api/index", "query_string": b"__path=/"}, None, None))
+    asyncio.run(mw({"type": "http", "path": "/api/index", "query_string": b"__path=%2F"}, None, None))
     assert seen["path"] == "/"
-    asyncio.run(mod.app({"type": "http", "path": "/api/status", "query_string": b""}, None, None))
+    asyncio.run(mw({"type": "http", "path": "/api/status", "query_string": b""}, None, None))
     assert seen["path"] == "/api/status"

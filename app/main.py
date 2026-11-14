@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -32,6 +33,30 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Aerial Monitor", lifespan=lifespan)
+
+
+class VercelRewriteFix:
+    """vercel.json rewrites "/<path>" to "/api/index?__path=/<path>", and Vercel hands the app the
+    rewritten path. Restore the original so routes match. No-op everywhere else."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            qs = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+            orig = next((v for k, v in qs if k == "__path"), None)
+            if orig is not None:
+                path = "/" + orig.lstrip("/")
+                scope = dict(scope, path=path, raw_path=path.encode(),
+                             query_string=urlencode([(k, v) for k, v in qs if k != "__path"]).encode())
+            elif scope.get("path", "").startswith("/api/index"):
+                path = scope["path"][len("/api/index"):] or "/"
+                scope = dict(scope, path=path, raw_path=path.encode())
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(VercelRewriteFix)
 
 
 @app.exception_handler(404)
