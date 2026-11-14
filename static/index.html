@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aerial Monitor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --line:#2a313c; --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --warn:#f0883e; --ok:#3fb950; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  #app { display:grid; grid-template-columns: 1fr 380px; height:100vh; }
+  #map { height:100%; background:#0b0e13; }
+  aside { background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  header { padding:14px 16px 10px; border-bottom:1px solid var(--line); }
+  h1 { font-size:16px; margin:0 0 4px; }
+  #status { color:var(--muted); font-size:12px; }
+  #status b { color:var(--text); font-weight:600; }
+  form { display:flex; gap:6px; padding:12px 16px 6px; }
+  input[type=text] { flex:1; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:9px 10px; font:inherit; }
+  button { background:var(--accent); color:#0b0e13; border:0; border-radius:6px; padding:0 12px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); padding:6px 10px; font-weight:500; }
+  #examples { display:flex; flex-wrap:wrap; gap:6px; padding:4px 16px 12px; }
+  .chip { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:3px 9px; cursor:pointer; }
+  .chip:hover { color:var(--text); border-color:var(--accent); }
+  #out { flex:1; overflow:auto; padding:0 16px 16px; }
+  .answer { white-space:pre-wrap; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:4px; }
+  .answer.spike { border-color:var(--warn); }
+  .meta { color:var(--muted); font-size:12px; margin-top:6px; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; font-size:12px; }
+  td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:4px; }
+  .tag.spike { background:var(--warn); color:#000; } .tag.normal { background:#23302a; color:var(--ok); }
+  .tag.dip { background:#1f2a3a; color:var(--accent); } .tag.insufficient_history { background:#2a2a2a; color:var(--muted); }
+  .legend { background:rgba(22,27,34,.9); color:var(--text); padding:6px 8px; border-radius:6px; font-size:11px; line-height:1.6; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+  @media (max-width: 800px) { #app { grid-template-columns:1fr; grid-template-rows: 55vh 45vh; } aside { border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <aside>
+    <header>
+      <h1>Aerial Monitor</h1>
+      <div id="status">Connecting…</div>
+    </header>
+    <form id="ask">
+      <input type="text" id="q" placeholder="Ask about air traffic…" autocomplete="off">
+      <button>Ask</button>
+    </form>
+    <div id="examples"></div>
+    <div id="out">
+      <button class="ghost" id="countView" type="button">Count aircraft in visible area</button>
+      <div id="result"></div>
+    </div>
+  </aside>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const EXAMPLES = [
+  "Do we see any unusual spike to New Zealand or England?",
+  "Any unusual spikes right now?",
+  "How many flights are over London?",
+  "How many aircraft over pincode 560001?",
+  "How many planes within 100 km of Dubai above 30000 ft?",
+  "Which flights are over Auckland?",
+  "Busiest countries right now",
+];
+const map = L.map('map', { preferCanvas: true, worldCopyJump: true, zoomControl: true }).setView([25, 20], 2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO | flights: OpenSky Network', subdomains: 'abcd', maxZoom: 12 }).addTo(map);
+const renderer = L.canvas({ padding: 0.3 });
+const planes = L.layerGroup().addTo(map);
+const highlight = L.layerGroup().addTo(map);
+const regions = L.layerGroup().addTo(map);
+
+function altColor(alt, ground) {
+  if (ground) return '#6e7681';
+  if (alt == null) return '#8b949e';
+  if (alt < 3000) return '#f0883e';
+  if (alt < 8000) return '#d2a8ff';
+  return '#58a6ff';
+}
+const legend = L.control({ position: 'bottomleft' });
+legend.onAdd = () => { const d = L.DomUtil.create('div', 'legend');
+  d.innerHTML = '<i style="background:#58a6ff"></i>cruise &gt;8 km<br><i style="background:#d2a8ff"></i>3–8 km<br><i style="background:#f0883e"></i>&lt;3 km<br><i style="background:#6e7681"></i>on ground<br><i style="background:#ffd33d"></i>query match'; return d; };
+legend.addTo(map);
+
+function popup(a) {
+  const [icao, cs, lat, lon, alt, hdg, vel, gnd, origin] = a;
+  return `<b>${cs || icao}</b><br>ICAO24 ${icao}<br>${origin || ''}<br>` +
+    `${gnd ? 'On ground' : `Alt ${alt != null ? Math.round(alt * 3.281).toLocaleString() + ' ft' : '?'}`}` +
+    `${vel ? ` · ${Math.round(vel * 1.944)} kt` : ''}${hdg != null ? ` · hdg ${Math.round(hdg)}°` : ''}`;
+}
+function drawPlanes(list, layer, color, r) {
+  layer.clearLayers();
+  for (const a of list) {
+    L.circleMarker([a[2], a[3]], { renderer, radius: r, stroke: false, fillOpacity: .85,
+      fillColor: color || altColor(a[4], a[7]) }).bindPopup(() => popup(a)).addTo(layer);
+  }
+}
+
+async function refresh() {
+  try {
+    const [st, s] = await Promise.all([fetch('/api/status').then(r => r.json()), fetch('/api/states').then(r => r.json())]);
+    drawPlanes(s.aircraft, planes, null, 2);
+    const when = st.snapshot_ts ? new Date(st.snapshot_ts * 1000).toLocaleTimeString() : '—';
+    document.getElementById('status').innerHTML =
+      `<b>${st.aircraft.toLocaleString()}</b> aircraft · <b>${st.airborne.toLocaleString()}</b> airborne · source <b>${st.fallback_demo ? 'DEMO (live feed unavailable)' : st.source}</b> · snapshot ${when}` +
+      (st.last_error ? `<br><span style="color:var(--warn)">${st.last_error}</span>` : '') +
+      `<br>Parser: ${st.llm ? 'Claude' : 'built-in rules'} · watching ${st.watching.length} regions` +
+      (st.persistent_history ? '' : ' · history not persisted');
+  } catch (e) { document.getElementById('status').textContent = 'Server unreachable'; }
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function renderResult(res) {
+  const anySpike = res.results.some(r => r.status === 'spike');
+  let html = `<div class="answer ${anySpike ? 'spike' : ''}">${esc(res.answer)}</div>`;
+  html += `<div class="meta">Parsed by ${res.parser} as <code>${res.intent.intent}</code>` +
+    (res.intent.places.length ? ` · ${res.intent.places.map(p => esc(p.name)).join(', ')}` : '') + `</div>`;
+  const spikes = res.results.filter(r => r.status);
+  if (spikes.length) {
+    html += '<table><tr><th>Region</th><th class="num">Now</th><th class="num">Typical</th><th class="num">×</th><th>Status</th></tr>' +
+      spikes.map(r => `<tr><td>${esc(r.region)}</td><td class="num">${r.current}</td><td class="num">${r.baseline ?? '—'}</td>` +
+        `<td class="num">${r.ratio ?? '—'}</td><td><span class="tag ${r.status}">${r.status.replace('_', ' ')}</span></td></tr>`).join('') + '</table>';
+  } else if (res.results.length && res.results[0].region !== undefined) {
+    html += '<table><tr><th>Region</th><th class="num">Aircraft</th></tr>' +
+      res.results.map(r => `<tr><td>${esc(r.region)}</td><td class="num">${r.count.toLocaleString()}</td></tr>`).join('') + '</table>';
+  }
+  document.getElementById('result').innerHTML = html;
+  regions.clearLayers();
+  if (res.regions.length) {
+    const g = L.geoJSON(res.regions, { style: { color: '#ffd33d', weight: 1.5, fillOpacity: 0.06 } }).addTo(regions);
+    map.fitBounds(g.getBounds(), { maxZoom: 9, padding: [20, 20] });
+  }
+  drawPlanes(res.aircraft, highlight, '#ffd33d', 3.5);
+}
+
+async function ask(q) {
+  document.getElementById('q').value = q;
+  document.getElementById('result').innerHTML = '<div class="meta">Thinking…</div>';
+  try {
+    const r = await fetch('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q }) });
+    if (!r.ok) throw new Error(await r.text());
+    renderResult(await r.json());
+  } catch (e) { document.getElementById('result').innerHTML = `<div class="answer">Error: ${esc(e.message)}</div>`; }
+}
+
+document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); const q = document.getElementById('q').value.trim(); if (q) ask(q); });
+document.getElementById('countView').addEventListener('click', async () => {
+  const b = map.getBounds();
+  const r = await fetch(`/api/count?s=${b.getSouth()}&w=${b.getWest()}&n=${b.getNorth()}&e=${b.getEast()}`).then(r => r.json());
+  document.getElementById('result').innerHTML = `<div class="answer">${r.count.toLocaleString()} airborne aircraft in the visible area.</div>`;
+});
+const ex = document.getElementById('examples');
+for (const q of EXAMPLES) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = q; c.onclick = () => ask(q); ex.appendChild(c); }
+refresh(); setInterval(refresh, 30000);
+</script>
+</body>
+</html>

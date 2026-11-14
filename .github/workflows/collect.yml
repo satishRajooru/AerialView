@@ -1,0 +1,17 @@
+# Keeps spike baselines building on Vercel (Hobby crons only run daily).
+# Set repository variable AERIAL_URL (e.g. https://aerialview.vercel.app) and,
+# if you set AM_COLLECT_TOKEN on Vercel, the same value as secret AM_COLLECT_TOKEN.
+name: collect-snapshot
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    if: ${{ vars.AERIAL_URL != '' }}
+    steps:
+      - name: Record snapshot
+        run: |
+          curl -fsS -X POST "${{ vars.AERIAL_URL }}/api/collect" \
+            -H "Authorization: Bearer ${{ secrets.AM_COLLECT_TOKEN }}" --max-time 90
