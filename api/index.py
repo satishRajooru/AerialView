@@ -20,4 +20,10 @@ async def app(scope, receive, send):
             path = "/" + orig.lstrip("/")
             scope = dict(scope, path=path, raw_path=path.encode(),
                          query_string=urlencode([(k, v) for k, v in qs if k != "__path"]).encode())
+        elif scope.get("path", "").startswith("/api/index"):
+            # Rewritten path without our marker: treat the remainder as the real path.
+            path = scope["path"][len("/api/index"):] or "/"
+            scope = dict(scope, path=path, raw_path=path.encode())
+        if scope.get("root_path"):
+            scope = dict(scope, root_path="")
     await fastapi_app(scope, receive, send)

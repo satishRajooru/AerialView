@@ -32,6 +32,16 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Aerial Monitor", lifespan=lifespan)
+
+
+@app.exception_handler(404)
+async def not_found(request, exc):
+    # Include what the app actually received: makes hosting/rewrite problems obvious.
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"detail": getattr(exc, "detail", "Not Found"), "path_seen": request.url.path,
+                         "root_path": request.scope.get("root_path", ""),
+                         "query": request.url.query}, status_code=404)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
