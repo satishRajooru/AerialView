@@ -49,6 +49,9 @@ MIN_BASELINE_SAMPLES = int(os.getenv("AM_MIN_BASELINE", "6"))
 USE_LLM = os.getenv("AM_LLM", "1" if os.getenv("ANTHROPIC_API_KEY") else "0") == "1"
 LLM_MODEL = os.getenv("AM_LLM_MODEL", "claude-opus-5-5")
 
+# adsb.lol: parallel requests per snapshot (its rate limit is tight; keep this small).
+ADSBLOL_CONCURRENCY = int(os.getenv("AM_ADSBLOL_CONCURRENCY", "3"))
+
 # Demo source knobs.
 DEMO_FLIGHTS = int(os.getenv("AM_DEMO_FLIGHTS", "6000"))
 DEMO_SPIKE = os.getenv("AM_DEMO_SPIKE", "AKL")  # inject extra arrivals into this airport ("" to disable)

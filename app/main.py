@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -81,20 +81,33 @@ def ready():
     monitor.ensure_fresh()
 
 
+# Let Vercel's CDN share one snapshot between all visitors, so the upstream feed is
+# hit about once a minute per edge region instead of once per page view.
+CDN_CACHE = f"public, max-age=0, s-maxage={config.SNAPSHOT_TTL}, stale-while-revalidate=600"
+
+
+def status_dict() -> dict:
+    return {"serverless": config.SERVERLESS, "fallback_demo": monitor.using_fallback,
+            "persistent_history": getattr(store, "persistent", True), "source": monitor.source.name,
+            "snapshot_ts": monitor.snapshot_ts, "aircraft": len(monitor.states),
+            "airborne": sum(1 for a in monitor.states if not a["on_ground"]), "last_error": monitor.last_error,
+            "watching": [r.name for r in monitor.regions.values()], "poll_seconds": config.POLL_SECONDS,
+            "llm": config.USE_LLM, "coverage": getattr(monitor.source, "coverage", None),
+            "source_errors": getattr(monitor.source, "last_errors", [])[:10]}
+
+
 @app.get("/api/status")
 def status():
     ready()
-    return {"serverless": config.SERVERLESS, "fallback_demo": monitor.using_fallback,
-            "persistent_history": getattr(store, "persistent", True), "source": monitor.source.name, "snapshot_ts": monitor.snapshot_ts, "aircraft": len(monitor.states),
-            "airborne": sum(1 for a in monitor.states if not a["on_ground"]), "last_error": monitor.last_error,
-            "watching": [r.name for r in monitor.regions.values()], "poll_seconds": config.POLL_SECONDS,
-            "llm": config.USE_LLM, "source_errors": getattr(monitor.source, "last_errors", [])[:10]}
+    return status_dict()
 
 
 @app.get("/api/states")
-def states(s: float = -90, w: float = -180, n: float = 90, e: float = 180, limit: int = 15000):
+def states(response: Response, s: float = -90, w: float = -180, n: float = 90, e: float = 180, limit: int = 15000):
     """Compact aircraft list for the map: [icao24, callsign, lat, lon, alt_m, heading, velocity, on_ground, origin]."""
     ready()
+    if monitor.states and not monitor.using_fallback:
+        response.headers["Cache-Control"] = CDN_CACHE
     out = []
     for a in monitor.states:
         if s <= a["lat"] <= n and (w <= a["lon"] <= e if w <= e else (a["lon"] >= w or a["lon"] <= e)):
@@ -102,7 +115,7 @@ def states(s: float = -90, w: float = -180, n: float = 90, e: float = 180, limit
                         a.get("heading"), a.get("velocity"), a["on_ground"], a.get("origin_country") or a.get("desc")])
             if len(out) >= limit:
                 break
-    return {"ts": monitor.snapshot_ts, "total": len(monitor.states), "aircraft": out}
+    return {"ts": monitor.snapshot_ts, "total": len(monitor.states), "aircraft": out, "status": status_dict()}
 
 
 class Ask(BaseModel):
@@ -121,9 +134,10 @@ async def query(body: Ask):
 
 
 @app.get("/api/count")
-def count_bbox(s: float, w: float, n: float, e: float):
+def count_bbox(response: Response, s: float, w: float, n: float, e: float):
     """Aircraft inside an arbitrary box (used by the map's 'count visible area' button)."""
     ready()
+    response.headers["Cache-Control"] = CDN_CACHE
     r = region_from_bbox("selected area", s, w, n, e)
     inside = [a for a in monitor.states if r.contains(a["lat"], a["lon"]) and not a["on_ground"]]
     return {"count": len(inside)}

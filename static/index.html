@@ -120,14 +120,17 @@ function drawPlanes(list, layer, color, r) {
 
 async function refresh() {
   try {
-    const [st, s] = await Promise.all([fetch('/api/status').then(r => r.json()), fetch('/api/states').then(r => r.json())]);
+    // One request: aircraft + status (CDN-cached and shared between visitors).
+    const s = await fetch('/api/states').then(r => r.json());
+    const st = s.status;
     drawPlanes(s.aircraft, planes, null, 2.5);
     const when = st.snapshot_ts ? new Date(st.snapshot_ts * 1000).toLocaleTimeString() : '—';
+    const cov = st.coverage && st.coverage.missing ? ` · ${st.coverage.missing} aircraft types temporarily missing (feed rate limit)` : '';
     document.getElementById('status').innerHTML =
       `<b>${st.aircraft.toLocaleString()}</b> aircraft · <b>${st.airborne.toLocaleString()}</b> airborne · source <b>${st.fallback_demo ? 'DEMO (live feed unavailable)' : st.source}</b> · snapshot ${when}` +
-      (st.last_error ? `<br><span style="color:var(--warn)">${st.last_error}</span>` : '') +
+      (st.last_error ? `<br><span style="color:var(--warn)">${esc(st.last_error)}</span>` : '') +
       `<br>Parser: ${st.llm ? 'Claude' : 'built-in rules'} · watching ${st.watching.length} regions` +
-      (st.persistent_history ? '' : ' · history not persisted');
+      (st.persistent_history ? '' : ' · history not persisted') + cov;
   } catch (e) { document.getElementById('status').textContent = 'Server unreachable'; }
 }
 
@@ -174,7 +177,7 @@ document.getElementById('countView').addEventListener('click', async () => {
 });
 const ex = document.getElementById('examples');
 for (const q of EXAMPLES) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = q; c.onclick = () => ask(q); ex.appendChild(c); }
-refresh(); setInterval(refresh, 30000);
+refresh(); setInterval(refresh, 60000);
 </script>
 </body>
 </html>

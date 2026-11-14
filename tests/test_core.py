@@ -138,3 +138,21 @@ def test_adsblol_source_merges_types(monkeypatch):
     assert set(by) == {"abc", "def"} and len(calls) == len(sources.AIRLINER_TYPES)
     assert by["abc"]["callsign"] == "ASA1" and round(by["abc"]["alt_m"]) == 10973 and by["abc"]["desc"] == "B738 · N1"
     assert by["def"]["on_ground"] and by["def"]["alt_m"] == 0
+
+
+def test_adsblol_rate_limit_uses_cache(monkeypatch):
+    src = sources.AdsbLolSource()
+    good = [{"hex": "a1", "lat": 1, "lon": 2, "alt_baro": 30000}]
+    monkeypatch.setattr(sources.config, "ADSBLOL_CONCURRENCY", 1)
+    monkeypatch.setattr(sources.AdsbLolSource, "_get", lambda self, p: good)
+    src.fetch()
+    calls = []
+
+    def throttled(self, path):
+        calls.append(path)
+        raise sources.RateLimited(path)
+
+    monkeypatch.setattr(sources.AdsbLolSource, "_get", throttled)
+    _, st = src.fetch()
+    assert len(calls) == 1  # stops after the first 429
+    assert [a["icao24"] for a in st] == ["a1"] and src.coverage["cached"] == len(sources.AIRLINER_TYPES)

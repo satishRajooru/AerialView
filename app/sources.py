@@ -94,51 +94,81 @@ def _norm_readsb(a: dict) -> dict | None:
             "squawk": a.get("squawk"), "last_contact": None}
 
 
+class RateLimited(Exception):
+    pass
+
+
 class AdsbLolSource:
+    """Global airliner snapshot from adsb.lol, gentle on its rate limit.
+
+    One request per aircraft type, a few at a time. The first 429 stops further
+    requests for this round; any type that couldn't be fetched is filled from its
+    last good result (kept up to TYPE_CACHE_SECONDS), so the map never loses whole
+    aircraft families because of throttling."""
+
     name = "adsb.lol"
     base = "https://api.adsb.lol/v2"
+    TYPE_CACHE_SECONDS = 900
 
     def __init__(self):
-        self.http = httpx.Client(timeout=15, headers={"User-Agent": config.USER_AGENT})
+        self.http = httpx.Client(timeout=12, headers={"User-Agent": config.USER_AGENT})
         self.last_errors: list[str] = []
+        self.type_cache: dict[str, tuple[float, list[dict]]] = {}
+        self.coverage = {"fresh": 0, "cached": 0, "missing": 0}
 
     def _get(self, path: str) -> list[dict]:
-        for attempt in range(3):
-            r = self.http.get(f"{self.base}{path}")
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                time.sleep(float(r.headers.get("retry-after", 0) or 0) or 0.5 * (attempt + 1))
-                continue
-            r.raise_for_status()
-            return r.json().get("ac") or []
-        return []
+        r = self.http.get(f"{self.base}{path}")
+        if r.status_code == 429:
+            raise RateLimited(path)
+        r.raise_for_status()
+        return r.json().get("ac") or []
 
     def fetch(self, bbox=None) -> tuple[int, list[dict]]:
+        import threading
         from concurrent.futures import ThreadPoolExecutor
 
-        seen: dict[str, dict] = {}
-        errors = []
+        throttled = threading.Event()
+        errors: list[str] = []
+        now = time.time()
 
         def one(t):
+            if throttled.is_set():
+                return t, None
             try:
-                return self._get(f"/type/{t}")
+                return t, self._get(f"/type/{t}")
+            except RateLimited:
+                throttled.set()
+                errors.append(f"{t}: rate limited")
             except Exception as exc:
-                errors.append(f"{t}: {exc}")
-                return []
+                errors.append(f"{t}: {type(exc).__name__}")
+            return t, None
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            for batch in pool.map(one, AIRLINER_TYPES):
-                for raw in batch:
-                    a = _norm_readsb(raw)
-                    if a and a["icao24"]:
-                        seen[a["icao24"]] = a
-        self.last_errors = errors
-        if not seen and errors:
-            raise RuntimeError(f"adsb.lol unavailable ({len(errors)} errors, e.g. {errors[0]})")
-        states = list(seen.values())
+        with ThreadPoolExecutor(max_workers=config.ADSBLOL_CONCURRENCY) as pool:
+            results = list(pool.map(one, AIRLINER_TYPES))
+
+        seen: dict[str, dict] = {}
+        cov = {"fresh": 0, "cached": 0, "missing": 0}
+        for t, raw in results:
+            if raw is not None:
+                states = [a for x in raw if (a := _norm_readsb(x)) and a["icao24"]]
+                self.type_cache[t] = (now, states)
+                cov["fresh"] += 1
+            elif t in self.type_cache and now - self.type_cache[t][0] < self.TYPE_CACHE_SECONDS:
+                states = self.type_cache[t][1]
+                cov["cached"] += 1
+            else:
+                cov["missing"] += 1
+                continue
+            for a in states:
+                seen[a["icao24"]] = a
+        self.last_errors, self.coverage = errors, cov
+        if not seen:
+            raise RuntimeError(f"adsb.lol unavailable ({errors[0] if errors else 'no data'})")
+        out = list(seen.values())
         if bbox:
             s, w, n, e = bbox
-            states = [a for a in states if s <= a["lat"] <= n and w <= a["lon"] <= e]
-        return int(time.time()), states
+            out = [a for a in out if s <= a["lat"] <= n and w <= a["lon"] <= e]
+        return int(now), out
 
     def point(self, lat: float, lon: float, radius_nm: float) -> list[dict]:
         """All aircraft (incl. GA/helicopters) within radius_nm (max 250) of a point."""
